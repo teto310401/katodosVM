@@ -1,0 +1,1833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>katoDoS</title>
+<style>
+  :root {
+    --bg: #0a0700;
+    --fg: #ffb000;
+    --fg-dim: #b37700;
+    --err: #ff3333;
+    --accent: #ffcc33;
+    --screen: #ffb000;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; color: var(--fg);
+    font-family: 'Courier New', 'Courier', 'Consolas', monospace;
+    font-size: 15px; line-height: 1.35;
+    overflow: hidden;
+  }
+  #crt-overlay {
+    position: fixed; inset: 0; pointer-events: none; z-index: 50;
+    background:
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 0%, rgba(0,0,0,.5) 80%, rgba(0,0,0,.92) 100%),
+      repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0px, rgba(0,0,0,.18) 1px, transparent 2px, transparent 4px);
+  }
+  #flicker {
+    position: fixed; inset: 0; pointer-events: none; z-index: 40;
+    background: rgba(255, 176, 0, 0.03);
+    animation: flicker 0.12s infinite;
+  }
+  @keyframes flicker { 0% { opacity: .28; } 50% { opacity: .34; } 100% { opacity: .28; } }
+  .glow { text-shadow: 0 0 2px var(--fg), 0 0 6px var(--fg); }
+
+  /* CRT 大头显示器的滚动干扰横条：偶尔从顶到底扫过 */
+  #crt-roll {
+    position: fixed; left: 0; right: 0; top: 0; height: 16%;
+    z-index: 45; pointer-events: none; opacity: 0;
+    background: linear-gradient(to bottom,
+      rgba(255,176,0,0) 0%,
+      rgba(255,176,0,0.10) 40%,
+      rgba(255,230,170,0.22) 50%,
+      rgba(255,176,0,0.10) 60%,
+      rgba(255,176,0,0) 100%);
+    transform: translateY(-120%);
+  }
+  #crt-roll.active { opacity: 1; animation: crtRoll 1.7s linear; }
+  @keyframes crtRoll {
+    0%   { transform: translateY(-120%); }
+    100% { transform: translateY(720%); }
+  }
+
+  #boot {
+    position: absolute; inset: 0; z-index: 10;
+    background: #000 url('wallpaper.jpg') center/cover no-repeat;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center;
+  }
+  #boot::before {
+    content: ''; position: absolute; inset: 0;
+    background: rgba(0,0,0,.78);
+  }
+  #boot > * { position: relative; z-index: 1; }
+  @keyframes powerOn {
+    0% { opacity: 0; transform: scale(.95) translateY(-12px); filter: brightness(3); }
+    30% { opacity: 1; transform: scale(1); filter: brightness(1); }
+    100% { opacity: 1; transform: scale(1); filter: brightness(1); }
+  }
+  /* 主板厂商图形 LOGO（KATO，类似华硕开机品牌图标） */
+  #boot-board {
+    margin: 0 0 4px; text-align: center;
+    opacity: 0; /* 由 JS 在黑屏后触发淡入 */
+  }
+  #boot-board svg { width: 340px; max-width: 66vw; height: auto; display: block; }
+  #boot-board .kato-wm { fill: var(--accent); }
+  #boot-board .kato-ring { fill: none; stroke: var(--fg); }
+  #boot-board .kato-pin { fill: var(--fg); }
+  #boot-board .kato-sub { fill: var(--fg-dim); }
+  /* DOS 系统自检阶段的系统图标（第二画面） */
+  #boot-dos-logo {
+    margin: 0 0 14px; text-align: center; color: var(--accent);
+    font-family: 'Courier New', Consolas, monospace; font-size: 11px; line-height: 1.12;
+    letter-spacing: 0; white-space: pre; text-shadow: 0 0 8px var(--accent);
+    opacity: 0;
+  }
+  #post {
+    margin-top: 14px; width: 600px; max-width: 92vw; min-height: 280px;
+    font-size: 13px; color: var(--fg-dim); white-space: pre-wrap; text-align: left;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .fade-out { animation: fadeOut .7s forwards; }
+  @keyframes fadeOut { to { opacity: 0; } }
+  .fade-in { animation: fadeIn .7s forwards; }
+
+  #terminal {
+    position: absolute; inset: 0; z-index: 5; display: none;
+    background: #000 url('wallpaper.jpg') center/cover no-repeat;
+    padding: 0; flex-direction: column;
+  }
+  #terminal::before {
+    content: ''; position: absolute; inset: 0;
+    background: rgba(8, 5, 0, 0.72);
+  }
+  #terminal > * { position: relative; z-index: 1; }
+  /* 进系统后顶部方块字标题（与原版一致） */
+  #term-banner {
+    flex: 0 0 auto; text-align: center; color: var(--accent);
+    font-family: 'Courier New', Consolas, monospace; font-size: 9px; line-height: 1.1;
+    letter-spacing: 0; white-space: pre; text-shadow: 0 0 5px var(--accent);
+    padding: 6px 0 5px; border-bottom: 1px solid #5a3d00;
+    background: rgba(20, 12, 0, 0.5);
+  }
+  #term-body { flex: 1; display: flex; flex-direction: column; padding: 16px 18px 34px; min-height: 0; }
+  #terminal-output {
+    flex: 1; overflow-y: auto; padding-bottom: 8px;
+  }
+  #terminal-output::-webkit-scrollbar { width: 8px; }
+  #terminal-output::-webkit-scrollbar-thumb { background: #664400; }
+  .line { margin: 0 0 1px 0; white-space: pre-wrap; }
+  .err { color: var(--err); text-shadow: 0 0 4px var(--err); }
+  .accent { color: var(--accent); text-shadow: 0 0 4px var(--accent); }
+  .dim { color: var(--fg-dim); }
+  .out { color: var(--fg); }
+  .art { color: var(--accent); text-shadow: 0 0 6px var(--accent); white-space: pre; }
+  #input-line { flex: 0; display: flex; align-items: baseline; margin-top: 4px; text-shadow: 0 0 6px var(--fg); }
+  #prompt { color: var(--fg); margin-right: 4px; }
+  #input-text { color: var(--fg); }
+  .cursor {
+    display: inline-block; width: 8px; height: 16px; background: var(--fg); vertical-align: bottom;
+    animation: blink 1s step-end infinite; box-shadow: 0 0 4px var(--fg);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #editor-overlay {
+    position: fixed; inset: 0; z-index: 60; display: none;
+    background: rgba(0,0,0,.92); flex-direction: column; padding: 24px;
+  }
+  #editor-title { color: var(--accent); margin-bottom: 8px; font-size: 14px; }
+  #editor-area {
+    flex: 1; background: #080808; color: var(--fg); border: 1px solid #5a3d00;
+    padding: 10px; font-family: inherit; font-size: 14px; resize: none; outline: none;
+  }
+  .btn-row { margin-top: 12px; display: flex; gap: 12px; }
+  .btn {
+    background: transparent; color: var(--fg); border: 1px solid var(--fg); padding: 6px 18px;
+    font-family: inherit; cursor: pointer; font-size: 14px;
+  }
+  .btn:hover { background: rgba(255,176,0,.15); }
+  .btn.accent { color: var(--accent); border-color: var(--accent); }
+  .btn.accent:hover { background: rgba(255,176,0,.15); }
+
+  /* ---- 游戏覆盖层 ---- */
+  #game-overlay {
+    position: fixed; inset: 0; z-index: 70; display: none;
+    background: #000; flex-direction: column; padding: 14px;
+  }
+  #game-title {
+    color: var(--accent); font-size: 14px; letter-spacing: 2px; margin-bottom: 8px;
+    text-shadow: 0 0 6px var(--accent);
+  }
+  #game-canvas { flex: 1; width: 100%; height: 100%; image-rendering: pixelated; background: #000; }
+
+  /* ---- Windows 3.x 字符桌面覆盖层 ---- */
+  #win-overlay {
+    position: fixed; inset: 0; z-index: 75; display: none;
+    background: #000; cursor: none;
+  }
+  #win-canvas { width: 100%; height: 100%; display: block; background: #000; }
+
+  /* ---- BIOS 设置界面 ---- */
+  #bios-overlay {
+    position: fixed; inset: 0; z-index: 80; display: none;
+    background: #000 url('wallpaper.jpg') center/cover no-repeat;
+    flex-direction: column; padding: 26px 30px; color: var(--fg);
+  }
+  #bios-overlay::before { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,.82); }
+  #bios-overlay > * { position: relative; z-index: 1; }
+  #bios-title {
+    color: var(--accent); font-size: 16px; letter-spacing: 1px;
+    text-shadow: 0 0 8px var(--accent); padding-bottom: 8px; border-bottom: 1px solid #5a3d00;
+  }
+  #bios-menu { flex: 1; font-size: 14px; line-height: 1.9; white-space: pre; margin-top: 10px; }
+  #bios-menu .row { display: block; padding: 0 6px; }
+  #bios-menu .row.sel { background: var(--fg); color: #000; text-shadow: none; }
+  #bios-menu .row .val { color: var(--accent); }
+  #bios-menu .row.sel .val { color: #5a3d00; }
+  #bios-help {
+    margin-top: 12px; color: var(--fg-dim); font-size: 12px;
+    border-top: 1px solid #5a3d00; padding-top: 8px;
+  }
+
+  /* 系统崩溃 / 停机画面：黑底琥珀，呼应 CRT 风格 */
+  #crash-screen {
+    position: fixed; inset: 0; z-index: 9999; display: none;
+    background: #000; color: var(--accent);
+    font-family: 'Courier New', Consolas, monospace; font-size: 16px;
+    align-items: center; justify-content: center; padding: 6vh 8vw;
+    text-shadow: 0 0 6px var(--accent); overflow: hidden;
+  }
+  #crash-screen.show { display: flex; animation: crashIn .12s ease; }
+  #crash-screen .crash-inner { max-width: 760px; width: 100%; }
+  #crash-screen .crash-text { white-space: pre-wrap; line-height: 1.55; margin: 0; }
+  @keyframes crashIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* 显示适配器故障（VGA.DRV 被删）：物理显示器仍亮，但文本模式渲染异常
+     —— 字符映射错乱、字形错位、行错位、偶发花屏；保持琥珀单色，不做炫酷恐怖风 */
+  body.vga-broken #terminal {
+    animation: vgaJitter .5s steps(3,end) infinite;
+    filter: blur(.35px) brightness(1.05);
+    text-shadow: 1px 0 0 rgba(255,176,0,.45), 0 0 4px rgba(255,176,0,.3);
+  }
+  @keyframes vgaJitter {
+    0%   { transform: translate(0,0); }
+    33%  { transform: translate(-1px,0); }
+    66%  { transform: translate(1px,0); }
+    100% { transform: translate(0,0); }
+  }
+  /* 部分行整体横向偏移，模拟字符/行定位错误 */
+  body.vga-broken #terminal-output .line:nth-child(3n) { transform: translateX(2px); }
+  body.vga-broken #terminal-output .line:nth-child(4n) { transform: translateX(-3px); }
+  /* CRT 层不做 RGB 错乱，仅略增闪烁/滚动，维持琥珀基调 */
+  body.vga-broken #flicker { animation: flicker 0.07s infinite; opacity: .5; }
+  body.vga-broken #crt-roll { animation: crtRoll 1.1s linear infinite; opacity: .55; }
+</style>
+</head>
+<body>
+  <div id="crt-overlay"></div>
+  <div id="flicker"></div>
+  <div id="crt-roll"></div>
+
+  <div id="boot">
+    <div id="boot-board">
+      <svg viewBox="0 0 420 196" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KATO">
+        <defs>
+          <filter id="katoGlow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="2.4" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g filter="url(#katoGlow)">
+          <!-- 芯片徽标 -->
+          <g>
+            <!-- CPU 引脚 -->
+            <g class="kato-pin">
+              <rect x="243" y="42" width="14" height="4"/><rect x="243" y="50" width="14" height="4"/><rect x="243" y="58" width="14" height="4"/>
+              <rect x="163" y="42" width="14" height="4"/><rect x="163" y="50" width="14" height="4"/><rect x="163" y="58" width="14" height="4"/>
+            </g>
+            <!-- 六边形芯片外壳 -->
+            <path class="kato-ring" stroke-width="3" d="M210 16 L241 34 L241 70 L210 88 L179 70 L179 34 Z"/>
+            <path class="kato-ring" stroke-width="1.4" opacity=".55" d="M210 24 L234 38 L234 66 L210 80 L186 66 L186 38 Z"/>
+            <!-- K 字标 -->
+            <text x="210" y="52" text-anchor="middle" dominant-baseline="central"
+                  class="kato-wm" font-size="42" font-weight="900"
+                  font-family="'Arial Black','Arial',sans-serif">K</text>
+          </g>
+          <!-- 品牌字 -->
+          <text x="210" y="146" text-anchor="middle" class="kato-wm"
+                font-size="62" font-weight="900" letter-spacing="7"
+                font-family="'Arial Black','Arial',sans-serif">KATO</text>
+          <!-- 副标 -->
+          <text x="212" y="176" text-anchor="middle" class="kato-sub"
+                font-size="12.5" font-weight="700" letter-spacing="11"
+                font-family="'Arial','Helvetica',sans-serif">M A I N B O A R D</text>
+        </g>
+      </svg>
+    </div>
+    <pre id="boot-dos-logo">██╗  ██╗ █████╗ ████████╗ ██████╗ ██████╗  ██████╗ ███████╗
+██║ ██╔╝██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗██╔═══██╗██╔════╝
+█████╔╝ ███████║   ██║   ██║   ██║██║  ██║██║   ██║███████╗
+██╔═██╗ ██╔══██║   ██║   ██║   ██║██║  ██║██║   ██║╚════██║
+██║  ██╗██║  ██║   ██║   ╚██████╔╝██████╔╝╚██████╔╝███████║
+╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝
+        katoDoS 1.0 — sandbox fantasy operating system</pre>
+    <div id="post"></div>
+  </div>
+
+  <!-- 系统崩溃 / 停机画面 -->
+  <div id="crash-screen"><div class="crash-inner"><pre class="crash-text"></pre></div></div>
+
+  <div id="terminal">
+    <pre id="term-banner">██╗  ██╗ █████╗ ████████╗ ██████╗ ██████╗  ██████╗ ███████╗
+██║ ██╔╝██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗██╔═══██╗██╔════╝
+█████╔╝ ███████║   ██║   ██║   ██║██║  ██║██║   ██║███████╗
+██╔═██╗ ██╔══██║   ██║   ██║   ██║██║  ██║██║   ██║╚════██║
+██║  ██╗██║  ██║   ██║   ╚██████╔╝██████╔╝╚██████╔╝███████║
+╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝</pre>
+    <div id="term-body">
+      <div id="terminal-output"></div>
+      <div id="input-line">
+        <span id="prompt"></span><span id="input-text"></span><span class="cursor"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="editor-overlay">
+    <div id="editor-title">编辑器</div>
+    <textarea id="editor-area" spellcheck="false"></textarea>
+    <div class="btn-row">
+      <button class="btn accent" id="editor-save">保存 (Ctrl+S)</button>
+      <button class="btn" id="editor-close">关闭 (Esc)</button>
+    </div>
+  </div>
+
+  <div id="game-overlay">
+    <div id="game-title">GAME</div>
+    <canvas id="game-canvas"></canvas>
+  </div>
+
+  <div id="win-overlay">
+    <canvas id="win-canvas"></canvas>
+  </div>
+
+  <div id="bios-overlay">
+    <div id="bios-title">katoBIOS Setup Utility &nbsp;—&nbsp; Main</div>
+    <div id="bios-menu"></div>
+    <div id="bios-help">&#8593;/&#8595; 选择 &nbsp;·&nbsp; Enter 修改 &nbsp;·&nbsp; <span class="key">F10</span> 保存并退出 &nbsp;·&nbsp; Esc 不保存退出</div>
+  </div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const bootEl = $('boot'), postEl = $('post'), terminalEl = $('terminal');
+  const outputEl = $('terminal-output'), promptEl = $('prompt'), inputTextEl = $('input-text');
+  const editorOverlay = $('editor-overlay'), editorArea = $('editor-area'), editorTitle = $('editor-title');
+  const gameOverlay = $('game-overlay'), gameTitle = $('game-title'), gameCanvas = $('game-canvas');
+  const winOverlay = $('win-overlay'), winCanvas = $('win-canvas');
+
+  let inputBuffer = '', history = [], histIndex = -1;
+  let promptText = 'C:\\>';
+  let booting = true;
+  let editorPath = '';
+  let activeGame = null;
+
+  const GCOL = { fg:'#ffb000', dim:'#b37700', accent:'#ffcc33', err:'#ff3333', bg:'#0a0700' };
+  function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function py(method, ...args) { return window.pywebview.api[method](...args); }
+
+  /* ================= 音效 (Web Audio) ================= */
+  let actx = null;
+  let soundEnabled = true;      // 删 SB16.DRV → 全局静音
+  let mouseBroken = false;      // 删 MOUSE.SYS → 鼠标不可用
+  let keyboardBroken = false;   // 删 KEYBOARD.DRV → 按键输出异常
+  function audioInit() {
+    if (actx) return;
+    if (!soundEnabled) return;  // 声卡已删，不创建音频上下文
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+    } catch (e) { actx = null; }
+  }
+  function beep(freq, dur, type, vol) {
+    if (!actx) return;
+    if (!soundEnabled) return;  // 声卡驱动缺失，静音
+    try {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      const v = (vol == null) ? 0.05 : vol;
+      o.connect(g); g.connect(actx.destination);
+      const t = actx.currentTime;
+      g.gain.setValueAtTime(v, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur);
+    } catch (e) {}
+  }
+  const sfxKey   = () => beep(1150 + Math.random() * 250, 0.018, 'square', 0.022);
+  const sfxEnter = () => beep(680, 0.06, 'square', 0.05);
+  const sfxError = () => beep(150, 0.28, 'sawtooth', 0.06);
+  const sfxPost  = () => beep(820, 0.12, 'square', 0.05);
+  const sfxDone  = () => { beep(523, 0.09, 'square', 0.05); setTimeout(() => beep(784, 0.13, 'square', 0.05), 130); };
+  const sfxFail  = () => { beep(200, 0.18, 'sawtooth', 0.07); setTimeout(() => beep(140, 0.35, 'sawtooth', 0.07), 200); };
+  const sfxCrash = () => { beep(90, 0.5, 'sawtooth', 0.09); setTimeout(() => beep(70, 0.7, 'sawtooth', 0.09), 130); };
+
+  /* ================= CRT 滚动干扰横条 ================= */
+  const crtRollEl = $('crt-roll');
+  function scheduleRoll() {
+    const delay = 6000 + Math.random() * 9000;
+    setTimeout(() => {
+      crtRollEl.classList.remove('active');
+      void crtRollEl.offsetWidth; // 强制重启动画
+      crtRollEl.classList.add('active');
+      crtRollEl.addEventListener('animationend', () => crtRollEl.classList.remove('active'), { once: true });
+      scheduleRoll();
+    }, delay);
+  }
+  scheduleRoll();
+
+  function renderLine(kind, text) {
+    if (kind === 'clear') { outputEl.innerHTML = ''; return; }
+    const div = document.createElement('div');
+    div.className = 'line ' + kind;
+    div.textContent = text;
+    outputEl.appendChild(div);
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+
+  function showInput() {
+    promptEl.textContent = promptText;
+    inputTextEl.textContent = inputBuffer;
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+
+  /* ================= 开机自检 (POST) ================= */
+  // 开机流程：
+  // 1) 黑屏 -> 点击/按键 -> 弹出 KATO 主板厂商 LOGO
+  // 2) LOGO 显示期间按 F2 进 BIOS，不按则 1.5s 后自动进入 POST 自检
+  // 3) 自检完成进系统后，顶部 term-banner 才显示 KATODOS 系统标题
+  function bootSplash() {
+    return new Promise(resolve => {
+      const board = $('boot-board');
+      let done = false;
+      let f2Listen = false;  // LOGO 显示后才允许 F2
+      function proceed() {
+        if (done) return; done = true;
+        window.removeEventListener('keydown', onKey);
+        board.style.animation = 'none';
+        board.style.transition = 'opacity .5s';
+        board.style.opacity = '0';
+        setTimeout(() => {
+          board.style.display = 'none';
+          setTimeout(resolve, 400);
+        }, 520);
+      }
+      function onKey(e) {
+        if (e.key === 'F2' && f2Listen && !done) {
+          e.preventDefault();
+          window.removeEventListener('keydown', onKey);
+          audioInit();
+          openBios(proceed);
+        } else if (!f2Listen && !done && e.key !== 'F5' && e.key !== 'Tab') {
+          // LOGO 出现前：任意键启动开机
+          onClick(e);
+        }
+      }
+      function onClick(e) {
+        if (done) return;
+        window.removeEventListener('keydown', onKey);
+        bootEl.removeEventListener('click', onClick);
+        audioInit();
+        // 弹出 KATO 主板厂商 LOGO
+        board.style.animation = 'powerOn .8s ease forwards';
+        // LOGO 显示后允许 F2
+        setTimeout(() => { f2Listen = true; window.addEventListener('keydown', onKey); }, 300);
+        // 1.5 秒后自动进入自检
+        setTimeout(proceed, 1500);
+      }
+      bootEl.addEventListener('click', onClick);
+      window.addEventListener('keydown', onKey);
+    });
+  }
+
+  /* ---- BIOS Setup 界面 ---- */
+  async function openBios(onExit) {
+    const bios = await py('getBios');
+    const items = [
+      { key:'boot_order', label:'Boot Order', type:'enum',
+        opts:['C: A: D:','A: C: D:','D: C: A:','C: D: A:'], val:bios.boot_order },
+      { key:'xms', label:'Extended Memory (XMS)', type:'enum',
+        opts:['Auto','16 MB','32 MB','64 MB','128 MB'], val:bios.xms },
+      { key:'threads', label:'CPU Threads', type:'enum',
+        opts:['Auto','1','2','4'], val:bios.threads },
+      { key:'sound', label:'Onboard Sound (SB16)', type:'toggle', val:bios.sound },
+      { key:'network', label:'Onboard Network (NE2000)', type:'toggle', val:bios.network },
+      { key:'mouse', label:'Onboard Mouse (PS/2)', type:'toggle', val:bios.mouse },
+      { key:'quickboot', label:'Quick Boot', type:'toggle', val:bios.quickboot },
+    ];
+    let sel = 0;
+    const overlay = $('bios-overlay'), menu = $('bios-menu');
+    function render() {
+      menu.innerHTML = '';
+      items.forEach((it, i) => {
+        const div = document.createElement('div');
+        div.className = 'row' + (i === sel ? ' sel' : '');
+        const val = it.type === 'toggle' ? (it.val ? 'On' : 'Off') : it.val;
+        const dots = '.'.repeat(Math.max(2, 28 - it.label.length));
+        div.innerHTML = it.label + ' ' + dots + ' : <span class="val">' + val + '</span>';
+        menu.appendChild(div);
+      });
+    }
+    function onKey(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === 'ArrowUp') { sel = (sel + items.length - 1) % items.length; render(); }
+      else if (e.key === 'ArrowDown') { sel = (sel + 1) % items.length; render(); }
+      else if (e.key === 'Enter' || e.key === ' ') {
+        const it = items[sel];
+        if (it.type === 'enum') it.val = it.opts[(it.opts.indexOf(it.val) + 1) % it.opts.length];
+        else it.val = !it.val;
+        render(); beep(660, 0.04, 'square', 0.04);
+      }
+      else if (e.key === 'F10') { exit(true); }
+      else if (e.key === 'Escape') { exit(false); }
+    }
+    function exit(save) {
+      window.removeEventListener('keydown', onKey);
+      overlay.style.display = 'none';
+      if (save) {
+        const out = {};
+        for (const it of items) out[it.key] = it.val;
+        py('setBios', out);
+        beep(880, 0.08, 'square', 0.05);
+      }
+      onExit();
+    }
+    render();
+    overlay.style.display = 'flex';
+    window.addEventListener('keydown', onKey);
+  }
+
+  async function doBoot() {
+    const res = await py('boot');
+    await bootSplash();
+    // 第二画面：显示 DOS 系统图标，与自检文字同属一个画面
+    $('boot-dos-logo').style.opacity = '1';
+    $('boot-dos-logo').style.transition = 'opacity .4s';
+    sfxPost(); // 开机上电 beep
+
+    // BIOS 头部
+    for (const l of (res.header || [])) {
+      postEl.textContent += l + '\n';
+      await wait(220);
+    }
+
+    // 模拟开机故障（可能是可恢复的 BIOS 提示，也可能是致命错误）
+    if (res.failure) {
+      const [title, lines, recoverable] = res.failure;
+      postEl.textContent += '\n';
+      const err = document.createElement('div');
+      err.className = 'line err';
+      err.textContent = '*** ' + title + ' ***';
+      postEl.appendChild(err);
+      sfxFail();
+      for (const l of lines) {
+        postEl.textContent += l + '\n';
+        await wait(260);
+      }
+      if (recoverable) {
+        // 可恢复：按任意键继续启动（如 CMOS/键盘错误，真实 BIOS 按 F1 继续）
+        postEl.textContent += '\n按任意键继续...\n';
+        await waitForKey();
+        // 不 return，继续走下面的内存自检 / 进系统流程
+      } else {
+        // 致命错误：停住，按任意键重启（仍是同一台电脑，状态不变）
+        postEl.textContent += '\n按任意键重启...\n';
+        await waitForKey();
+        return restartBoot();
+      }
+    }
+
+    // 内存自检：从 0 计数到 mem_total_k（模拟真实 486 BIOS）
+    const memLine = document.createElement('div');
+    memLine.className = 'line out';
+    postEl.appendChild(memLine);
+    let shown = 0;
+    const total = res.mem_total_k || 65536;
+    const stepK = 2048;
+    while (shown < total) {
+      shown = Math.min(total, shown + stepK);
+      memLine.textContent = 'Memory Test : ' + shown.toLocaleString() + 'K';
+      await wait(32);
+    }
+    memLine.textContent += ' OK';
+    await wait(180);
+    // 硬件检测 / 启动
+    for (const l of (res.footer || [])) {
+      postEl.textContent += l + '\n';
+      await wait(220);
+    }
+    await wait(700);
+    sfxDone(); // 进系统提示音
+    bootEl.classList.add('fade-out');
+    await wait(700);
+    bootEl.style.display = 'none';
+    terminalEl.style.display = 'flex';
+    terminalEl.classList.add('fade-in');
+    booting = false;
+    // 按当前 VFS 实际状态应用显示模式（删了 VGA.DRV 重启后画面依旧故障）
+    await applyDisplayMode();
+    // 开机检测到 U 盘：提示已挂载为只读沙箱镜像
+    if (res.usb && res.usb.length) {
+      renderLine('dim', '');
+      for (const info of res.usb) {
+        renderLine('out', '检测到可移动磁盘 ' + info.root + ' (卷标: ' + (info.label || '(无)') + ')');
+        renderLine('out', '  已挂载为 ' + info.letter + ': — 只读沙箱镜像（浏览懒加载目录，TYPE 文件才载入内容）。');
+      }
+    }
+    showInput();
+  }
+
+  function waitForKey() {
+    return new Promise(resolve => {
+      function onKey(e) { if (e.key !== 'F5') { window.removeEventListener('keydown', onKey); resolve(); } }
+      window.addEventListener('keydown', onKey);
+    });
+  }
+
+  let _crashTimer = null;
+  function showCrash(text) {
+    const el = $('crash-screen');
+    el.querySelector('.crash-text').textContent = text;
+    el.classList.add('show');
+    sfxCrash();
+    if (_crashTimer) clearTimeout(_crashTimer);
+    // 停机画面短暂闪烁后淡出，回到已崩溃的终端（仍可用 SYS / REBOOT）
+    _crashTimer = setTimeout(() => el.classList.remove('show'), 2800);
+  }
+  // 显示适配器故障（VGA.DRV 被删）：画面渲染异常 —— 字符映射错乱、字形错位、行错位、偶发花屏
+  // 仍是琥珀单色，不做炫酷恐怖滤镜，模拟真实文本模式渲染错误
+  let _glitchTimer = null;
+  const _GLITCH_CHARS = '░▒▓█▄▀■▌▐─│┼├┬┴=*+/\\|<>#@%&$';
+  function _clearGlitch() {
+    outputEl.querySelectorAll('.line[data-glitched]').forEach(line => {
+      line.style.transform = '';
+      if (line.dataset.raw != null) { line.textContent = line.dataset.raw; delete line.dataset.raw; }
+      delete line.dataset.glitched;
+    });
+  }
+  function _applyGlitch() {
+    _clearGlitch();
+    const lines = Array.from(outputEl.querySelectorAll('.line'));
+    if (!lines.length) return;
+    // 仅扰动可见末段输出，避免性能问题
+    const pool = lines.slice(-Math.min(lines.length, 60));
+    const n = 2 + (Math.random() * 4 | 0);
+    for (let i = 0; i < n; i++) {
+      const line = pool[Math.random() * pool.length | 0];
+      if (!line || line.dataset.glitched) continue;
+      line.dataset.glitched = '1';
+      // 行级错位：整行横向偏移，模拟字符/行定位错误
+      const dx = (Math.random() * 9 - 4) | 0;
+      line.style.transform = 'translateX(' + dx + 'px)';
+      // 字符级字形错乱：部分字符被映射到错误字形（花屏），保留原位宽，下一 tick 还原
+      const txt = line.textContent;
+      if (txt && Math.random() < 0.7) {
+        line.dataset.raw = txt;
+        let out = '';
+        for (const ch of txt) {
+          if (ch !== ' ' && ch !== '\n' && Math.random() < 0.16) out += _GLITCH_CHARS[Math.random() * _GLITCH_CHARS.length | 0];
+          else out += ch;
+        }
+        line.textContent = out;
+      }
+    }
+  }
+  function _setGlitch(on) {
+    document.body.classList.toggle('vga-broken', !!on);
+    if (on) {
+      if (!_glitchTimer) _glitchTimer = setInterval(_applyGlitch, 650);
+    } else {
+      if (_glitchTimer) { clearInterval(_glitchTimer); _glitchTimer = null; }
+      _clearGlitch();
+    }
+  }
+  function setDisplayMode(mode) { _setGlitch(mode === 'vga-broken'); }
+  // 进系统后按 VFS 真实状态应用显示模式（重启后依旧反映删除结果）
+  async function applyDisplayMode() {
+    try {
+      const r = await py('displayMode');
+      _setGlitch((r && r.mode) === 'vga-broken');
+    } catch (e) { /* 忽略 */ }
+  }
+
+  async function submit(line) {
+    const thisPrompt = promptText;
+    renderLine('out', thisPrompt + ' ' + line);
+    inputBuffer = ''; histIndex = history.length;
+    const res = await py('execute', line);
+    promptText = res.prompt || promptText;
+    let reboot = false, exit = false;
+    for (const item of res.lines) {
+      if (item.kind === 'reboot') reboot = true;
+      else if (item.kind === 'exit') exit = true;
+      else if (item.kind === 'edit') openEditor(item.text || '');
+      else if (item.kind === 'game') openGame(item.text);
+      else if (item.kind === 'win') openWin3();
+      else if (item.kind === 'crash') showCrash(item.text);
+      else if (item.kind === 'mode') setDisplayMode(item.text);
+      else if (item.kind === 'sound-off') { soundEnabled = false; sfxError(); renderLine('err', item.text + ' -- 声卡驱动缺失'); }
+      else if (item.kind === 'sound-on') { soundEnabled = true; renderLine('out', item.text); }
+      else if (item.kind === 'mouse-broken') { mouseBroken = true; sfxError(); renderLine('err', item.text + ' -- 鼠标驱动缺失'); }
+      else if (item.kind === 'mouse-ok') { mouseBroken = false; renderLine('out', item.text); }
+      else if (item.kind === 'keyboard-broken') { keyboardBroken = true; sfxError(); renderLine('err', item.text + ' -- 键盘驱动缺失'); }
+      else if (item.kind === 'keyboard-ok') { keyboardBroken = false; renderLine('out', item.text); }
+      else if (item.kind === 'import') {
+        const r = await py('importFile', item.text);
+        if (r && r.ok) {
+          const fs = r.files || [];
+          if (!fs.length) renderLine('dim', '未选择文件。');
+          for (const f of fs) {
+            renderLine('accent', '已导入 ' + f.name + ' (' + f.size + ' 字节) -> ' + f.vmpath);
+          }
+        } else {
+          renderLine('err', (r && r.error) ? r.error : '导入失败。');
+        }
+      }
+      else {
+        if (item.kind === 'err') sfxError();
+        renderLine(item.kind, item.text);
+      }
+    }
+    showInput();
+    if (exit) { py('exit').catch(()=>{}); setTimeout(()=>window.close(), 200); }
+    if (reboot) setTimeout(restartBoot, 300);
+  }
+
+  function restartBoot() {
+    // 注意：REBOOT 仍是同一台电脑，VFS/磁盘状态保留（不要清除故障显示模式）。
+    // 进系统后由 applyDisplayMode() 按 VFS 实际状态决定是否保持 glitch。
+    terminalEl.style.display = 'none'; terminalEl.classList.remove('fade-in');
+    outputEl.innerHTML = ''; inputBuffer = ''; history = []; histIndex = -1;
+    bootEl.style.display = 'flex'; bootEl.classList.remove('fade-out');
+    const board = $('boot-board'); board.style.display = 'flex'; board.style.opacity = '0'; board.style.animation = 'none';
+    $('boot-dos-logo').style.opacity = '0';
+    postEl.textContent = ''; booting = true;
+    doBoot();
+  }
+
+  /* ================= 编辑器 ================= */
+  async function openEditor(path) {
+    editorPath = path;
+    editorTitle.textContent = '编辑器: ' + (path || '未命名');
+    const content = await py('readFile', path || '');
+    editorArea.value = content;
+    editorOverlay.style.display = 'flex';
+    editorArea.focus();
+  }
+  function closeEditor() { editorOverlay.style.display = 'none'; inputBuffer = ''; showInput(); }
+  async function saveEditor() {
+    if (!editorPath) return;
+    const ok = await py('writeFile', editorPath, editorArea.value);
+    renderLine(ok ? 'accent' : 'err', ok ? '已保存 ' + editorPath : '保存失败');
+  }
+
+  $('editor-save').onclick = saveEditor;
+  $('editor-close').onclick = closeEditor;
+  editorArea.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveEditor(); }
+    if (e.key === 'Escape') { e.preventDefault(); closeEditor(); }
+  });
+
+  /* ================= 小游戏 ================= */
+  function makeView(cv) {
+    const dpr = window.devicePixelRatio || 1;
+    const r = cv.getBoundingClientRect();
+    cv.width = Math.max(1, Math.floor(r.width * dpr));
+    cv.height = Math.max(1, Math.floor(r.height * dpr));
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: r.width, h: r.height };
+  }
+
+  function createSnake(cv, onExit) {
+    const { ctx, w, h } = makeView(cv);
+    const W = 24, H = 18;
+    const cell = Math.min(w / W, h / H);
+    const ox = (w - cell * W) / 2, oy = (h - cell * H) / 2;
+    let snake = [{ x: 8, y: 8 }], dir = { x: 1, y: 0 }, pending = { x: 1, y: 0 };
+    let food = { x: 14, y: 8 }, score = 0, dead = false, alive = true;
+    function place() {
+      while (true) {
+        const f = { x: Math.floor(Math.random() * W), y: Math.floor(Math.random() * H) };
+        if (!snake.some(p => p.x === f.x && p.y === f.y)) { food = f; return; }
+      }
+    }
+    function step() {
+      if (dead) return;
+      dir = pending;
+      const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+      if (head.x < 0 || head.y < 0 || head.x >= W || head.y >= H || snake.some(p => p.x === head.x && p.y === head.y)) { dead = true; return; }
+      snake.unshift(head);
+      if (head.x === food.x && head.y === food.y) { score += 10; place(); }
+      else snake.pop();
+    }
+    function draw() {
+      ctx.fillStyle = GCOL.bg; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = GCOL.fg; ctx.globalAlpha = 0.35; ctx.strokeRect(ox, oy, cell * W, cell * H); ctx.globalAlpha = 1;
+      ctx.fillStyle = GCOL.err; ctx.fillRect(ox + food.x * cell + 1, oy + food.y * cell + 1, cell - 2, cell - 2);
+      snake.forEach((p, i) => { ctx.fillStyle = i === 0 ? GCOL.accent : GCOL.fg; ctx.fillRect(ox + p.x * cell + 1, oy + p.y * cell + 1, cell - 2, cell - 2); });
+      ctx.fillStyle = GCOL.accent; ctx.font = Math.max(12, cell * 0.8) + "px 'Courier New',monospace"; ctx.textAlign = 'left';
+      ctx.fillText('SCORE ' + score, ox + 4, oy - 6);
+      if (dead) {
+        ctx.textAlign = 'center'; ctx.fillStyle = GCOL.err; ctx.font = cell * 1.4 + "px 'Courier New',monospace";
+        ctx.fillText('GAME OVER', w / 2, h / 2);
+        ctx.font = cell * 0.7 + "px 'Courier New',monospace"; ctx.fillStyle = GCOL.fg;
+        ctx.fillText('press Q to return to DOS', w / 2, h / 2 + cell * 1.4); ctx.textAlign = 'left';
+      }
+    }
+    const timer = setInterval(step, 130);
+    let raf = requestAnimationFrame(function loop() { draw(); if (alive) raf = requestAnimationFrame(loop); });
+    return {
+      destroy() { clearInterval(timer); alive = false; cancelAnimationFrame(raf); },
+      onKey(e) {
+        const k = e.key.toLowerCase();
+        if (k === 'q' || k === 'escape') { onExit(); return; }
+        if (dead) return;
+        if (k === 'arrowup' || k === 'w') { if (!(dir.x === 0 && dir.y === 1)) pending = { x: 0, y: -1 }; }
+        else if (k === 'arrowdown' || k === 's') { if (!(dir.x === 0 && dir.y === -1)) pending = { x: 0, y: 1 }; }
+        else if (k === 'arrowleft' || k === 'a') { if (!(dir.x === 1 && dir.y === 0)) pending = { x: -1, y: 0 }; }
+        else if (k === 'arrowright' || k === 'd') { if (!(dir.x === -1 && dir.y === 0)) pending = { x: 1, y: 0 }; }
+      }
+    };
+  }
+
+  function createTetris(cv, onExit) {
+    const { ctx, w, h } = makeView(cv);
+    const TW = 10, TH = 20;
+    const PIECES = [[[1,1,1,1]],[[1,1],[1,1]],[[0,1,0],[1,1,1]],[[1,0,0],[1,1,1]],[[0,0,1],[1,1,1]],[[0,1,1],[1,1,0]],[[1,1,0],[0,1,1]]];
+    const rotate = m => m[0].map((_, i) => m.map(r => r[i]).reverse());
+    let board = Array.from({ length: TH }, () => Array(TW).fill(0));
+    let piece = null, px = 3, py = 0, score = 0, lines = 0, dead = false, alive = true;
+    function collide(p, x, y) {
+      for (let yy = 0; yy < p.length; yy++) for (let xx = 0; xx < p[yy].length; xx++) {
+        if (!p[yy][xx]) continue;
+        const bx = x + xx, by = y + yy;
+        if (bx < 0 || bx >= TW || by >= TH) return true;
+        if (by >= 0 && board[by][bx]) return true;
+      }
+      return false;
+    }
+    function spawn() { piece = PIECES[Math.floor(Math.random() * PIECES.length)]; px = 3; py = 0; if (collide(piece, px, py)) dead = true; }
+    function merge() {
+      piece.forEach((row, y) => row.forEach((v, x) => { if (v && py + y >= 0) board[py + y][px + x] = 1; }));
+      let cleared = 0;
+      for (let y = TH - 1; y >= 0; y--) {
+        if (board[y].every(v => v)) { board.splice(y, 1); board.unshift(Array(TW).fill(0)); cleared++; y++; }
+      }
+      if (cleared) { lines += cleared; score += [0,40,100,300,1200][cleared] || 0; }
+      spawn();
+    }
+    function step() { if (dead) return; if (!piece) spawn(); if (!collide(piece, px, py + 1)) py++; else merge(); }
+    function move(dx, dy) {
+      if (dead || !piece) return;
+      if (dy > 0) { if (!collide(piece, px, py + 1)) { py++; score += 1; } }
+      else if (dx !== 0) { if (!collide(piece, px + dx, py)) px += dx; }
+      else if (dy < 0) { const r = rotate(piece); if (!collide(r, px, py)) piece = r; }
+    }
+    function drop() { if (dead || !piece) return; while (!collide(piece, px, py + 1)) py++; merge(); }
+    function draw() {
+      const cell = Math.min(w / (TW + 7), h / TH);
+      const ox = (w - cell * (TW + 7)) / 2, oy = (h - cell * TH) / 2;
+      ctx.fillStyle = GCOL.bg; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = GCOL.fg; ctx.globalAlpha = 0.4; ctx.strokeRect(ox, oy, cell * TW, cell * TH); ctx.globalAlpha = 1;
+      const dc = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(ox + x * cell + 1, oy + y * cell + 1, cell - 2, cell - 2); };
+      board.forEach((row, y) => row.forEach((v, x) => v && dc(x, y, GCOL.fg)));
+      if (piece) piece.forEach((row, y) => row.forEach((v, x) => v && dc(px + x, py + y, GCOL.accent)));
+      ctx.fillStyle = GCOL.accent; ctx.font = cell * 0.9 + "px 'Courier New',monospace"; ctx.textAlign = 'left';
+      const tx = ox + (TW + 1) * cell;
+      ctx.fillText('SCORE', tx, oy + cell * 2); ctx.fillText(String(score), tx, oy + cell * 3);
+      ctx.fillText('LINES', tx, oy + cell * 5); ctx.fillText(String(lines), tx, oy + cell * 6);
+      if (dead) { ctx.textAlign = 'center'; ctx.fillStyle = GCOL.err; ctx.font = cell * 1.3 + "px 'Courier New',monospace"; ctx.fillText('GAME OVER', w / 2, h / 2); ctx.textAlign = 'left'; }
+    }
+    spawn();
+    const timer = setInterval(step, 450);
+    let raf = requestAnimationFrame(function loop() { draw(); if (alive) raf = requestAnimationFrame(loop); });
+    return {
+      destroy() { clearInterval(timer); alive = false; cancelAnimationFrame(raf); },
+      onKey(e) {
+        const k = e.key.toLowerCase();
+        if (k === 'q' || k === 'escape') { onExit(); return; }
+        if (k === 'arrowleft' || k === 'a') move(-1, 0);
+        else if (k === 'arrowright' || k === 'd') move(1, 0);
+        else if (k === 'arrowdown' || k === 's') move(0, 1);
+        else if (k === 'arrowup' || k === 'w') move(0, -1);
+        else if (k === ' ') drop();
+      }
+    };
+  }
+
+  function createMines(cv, onExit) {
+    const { ctx, w, h } = makeView(cv);
+    const MW = 9, MH = 9, MINES = 10;
+    let mines = null, open = new Set(), flags = new Set(), dead = false, won = false, started = 0, time = 0, alive = true;
+    function gen(sx, sy) { const m = new Set(); while (m.size < MINES) { const i = Math.floor(Math.random() * MW * MH); if (i === sy * MW + sx) continue; m.add(i); } return m; }
+    function click(x, y, flag) {
+      if (dead || won) return;
+      const i = y * MW + x;
+      if (!mines) { mines = gen(x, y); started = Date.now(); }
+      if (flag) { if (flags.has(i)) flags.delete(i); else flags.add(i); return; }
+      if (flags.has(i)) return;
+      if (mines.has(i)) { dead = true; return; }
+      const flood = [i];
+      while (flood.length) {
+        const c = flood.pop();
+        if (open.has(c)) continue;
+        open.add(c);
+        const cx = c % MW, cy = Math.floor(c / MW);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= MW || ny >= MH) continue;
+          if (mines.has(ny * MW + nx)) { /* count later */ }
+        }
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= MW || ny >= MH) continue;
+          if (mines.has(ny * MW + nx)) n++;
+        }
+        if (n === 0) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= MW || ny >= MH) continue;
+          if (!open.has(ny * MW + nx)) flood.push(ny * MW + nx);
+        }
+      }
+      if (open.size === MW * MH - MINES) { won = true; time = Math.floor((Date.now() - started) / 1000); }
+    }
+    function neighbor(cx, cy) { let n = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= MW || ny >= MH) continue; if (mines && mines.has(ny * MW + nx)) n++; } return n; }
+    let cell, ox, oy;
+    function draw() {
+      cell = Math.min(w / MW, h / (MH + 1.5));
+      ox = (w - cell * MW) / 2; oy = (h - cell * MH) / 2 + cell * 0.6;
+      ctx.fillStyle = GCOL.bg; ctx.fillRect(0, 0, w, h);
+      ctx.font = cell * 0.7 + "px 'Courier New',monospace"; ctx.fillStyle = GCOL.accent; ctx.textAlign = 'left';
+      ctx.fillText(dead ? 'BOOM! Q to quit' : won ? ('CLEARED in ' + time + 's!') : ('cells left: ' + (MW * MH - MINES - open.size) + '  flags: ' + flags.size), ox, oy - cell * 0.75);
+      for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+        const i = y * MW + x, gx = ox + x * cell, gy = oy + y * cell;
+        if (open.has(i)) {
+          ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(gx, gy, cell - 1, cell - 1);
+          const n = neighbor(x, y);
+          if (n > 0) { ctx.fillStyle = n >= 3 ? GCOL.err : (n === 2 ? GCOL.accent : GCOL.fg); ctx.fillText(String(n), gx + cell * 0.28, gy + cell * 0.72); }
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(gx, gy, cell - 1, cell - 1);
+          if (flags.has(i)) { ctx.fillStyle = GCOL.err; ctx.fillText('F', gx + cell * 0.3, gy + cell * 0.72); }
+          else if (dead && mines && mines.has(i)) { ctx.fillStyle = GCOL.err; ctx.fillText('*', gx + cell * 0.3, gy + cell * 0.72); }
+        }
+      }
+    }
+    function hit(e) {
+      const r = cv.getBoundingClientRect();
+      const cc = Math.min(w / MW, h / (MH + 1.5));
+      const oox = (w - cc * MW) / 2, ooy = (h - cc * MH) / 2 + cc * 0.6;
+      const x = Math.floor((e.clientX - r.left - oox) / cc), y = Math.floor((e.clientY - r.top - ooy) / cc);
+      return (x >= 0 && y >= 0 && x < MW && y < MH) ? { x, y } : null;
+    }
+    cv.onclick = e => { if (mouseBroken) return; const p = hit(e); if (p) click(p.x, p.y, false); };
+    cv.oncontextmenu = e => { e.preventDefault(); if (mouseBroken) return; const p = hit(e); if (p) click(p.x, p.y, true); };
+    let raf = requestAnimationFrame(function loop() { draw(); if (alive) raf = requestAnimationFrame(loop); });
+    return {
+      destroy() { alive = false; cancelAnimationFrame(raf); cv.onclick = null; cv.oncontextmenu = null; },
+      onKey(e) { const k = e.key.toLowerCase(); if (k === 'q' || k === 'escape') onExit(); }
+    };
+  }
+
+  function createGuess(cv, onExit) {
+    const { ctx, w, h } = makeView(cv);
+    let target = Math.floor(Math.random() * 100) + 1, tries = 0, msg = "I'm thinking of a number 1-100.", input = "", done = false, alive = true;
+    function push(k) {
+      if (done) return;
+      if (/^[0-9]$/.test(k) && input.length < 3) input += k;
+      else if (k === 'backspace') input = input.slice(0, -1);
+      else if (k === 'enter' && input) {
+        const n = parseInt(input, 10); tries++;
+        if (n === target) { done = true; msg = 'CORRECT! ' + target + ' in ' + tries + ' tries.'; }
+        else msg = n < target ? (n + ' is too LOW up-arrow') : (n + ' is too HIGH down-arrow');
+        input = '';
+      }
+    }
+    function draw() {
+      ctx.fillStyle = GCOL.bg; ctx.fillRect(0, 0, w, h); ctx.textAlign = 'center';
+      ctx.fillStyle = GCOL.accent; ctx.font = Math.min(w, h) * 0.09 + "px 'Courier New',monospace"; ctx.fillText('GUESS THE NUMBER', w / 2, h * 0.2);
+      ctx.fillStyle = GCOL.fg; ctx.font = Math.min(w, h) * 0.06 + "px 'Courier New',monospace"; ctx.fillText(msg, w / 2, h * 0.4);
+      ctx.font = Math.min(w, h) * 0.12 + "px 'Courier New',monospace"; ctx.fillStyle = done ? GCOL.accent : GCOL.fg; ctx.fillText(input || '_', w / 2, h * 0.6);
+      ctx.font = Math.min(w, h) * 0.045 + "px 'Courier New',monospace"; ctx.fillStyle = GCOL.fg; ctx.globalAlpha = 0.6;
+      ctx.fillText('tries: ' + tries + '   type digits, ENTER to guess, Q to quit', w / 2, h * 0.8); ctx.globalAlpha = 1; ctx.textAlign = 'left';
+    }
+    let raf = requestAnimationFrame(function loop() { draw(); if (alive) raf = requestAnimationFrame(loop); });
+    return {
+      destroy() { alive = false; cancelAnimationFrame(raf); },
+      onKey(e) {
+        const k = e.key.toLowerCase();
+        if (k === 'q' || k === 'escape') { onExit(); return; }
+        if (k === 'enter') push('enter'); else if (k === 'backspace') push('backspace'); else push(e.key);
+      }
+    };
+  }
+
+  function createMatrix(cv, onExit) {
+    const { ctx, w, h } = makeView(cv);
+    const fs = 16, n = Math.max(1, Math.floor(w / fs));
+    let cols = Array.from({ length: n }, () => Math.floor(Math.random() * (h / fs)));
+    const chars = "アイウエオカキクケコ01サシスセソタチツテト";
+    let alive = true;
+    function draw() {
+      ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(0, 0, w, h);
+      ctx.font = fs + "px 'Courier New',monospace"; ctx.fillStyle = '#ffb000';
+      cols.forEach((y, i) => {
+        const ch = chars[Math.floor(Math.random() * chars.length)];
+        ctx.fillText(ch, i * fs, y * fs);
+        cols[i] = (y * fs > h && Math.random() > 0.975) ? 0 : y + 1;
+      });
+    }
+    let raf = requestAnimationFrame(function loop() { draw(); if (alive) raf = requestAnimationFrame(loop); });
+    return {
+      destroy() { alive = false; cancelAnimationFrame(raf); },
+      onKey(e) { const k = e.key.toLowerCase(); if (k === 'q' || k === 'escape') onExit(); }
+    };
+  }
+
+  const GAMES = { snake: createSnake, tetris: createTetris, mines: createMines, guess: createGuess, matrix: createMatrix };
+  function openGame(name) {
+    gameOverlay.style.display = 'flex';
+    gameTitle.textContent = (name || 'GAME').toUpperCase() + '  —  Q / Esc 退出';
+    const factory = GAMES[name] || createSnake;
+    activeGame = factory(gameCanvas, closeGame);
+  }
+  function closeGame() {
+    // 释放该游戏在后端占用的内存（与内核 _mem_alloc 对应）
+    py('free_game').catch(() => {});
+    if (activeGame) { activeGame.destroy(); activeGame = null; }
+    gameOverlay.style.display = 'none';
+    inputBuffer = ''; showInput();
+  }
+
+  /* ================= Windows 3.x 字符桌面 ================= */
+  let win3 = null;
+
+  function openWin3() {
+    winOverlay.style.display = 'block';
+    winCanvas.focus();
+    const cv = winCanvas;
+    const ctx = cv.getContext('2d');
+    const W = 14, H = 20;
+    let cols = 0, rows = 0;
+    const mouse = { cx: 0, cy: 0, down: false };
+    let exitWin = false;
+    let dragWin = null, dragOff = { x: 0, y: 0 };
+    let selectedDesktop = -1;
+    let selectedInWin = null;  // {winId, idx}
+    let statusMsg = 'Program Manager  ·  双击分组图标展开  ·  Esc 退出 Windows';
+    let openMenu = null;  // {winId, mi, items, hover}
+    let lastClickTime = 0, lastClickTarget = null;
+
+    const C = {
+      desktop: '#0080A0', desktopPat: '#006090',
+      titleBar: '#000080', titleText: '#FFFFFF', titleInactive: '#808080',
+      winBg: '#C0C0C0', winText: '#000000', menuBar: '#C0C0C0',
+      menuSel: '#000080', menuSelText: '#FFFFFF',
+      frameLight: '#FFFFFF', frameDark: '#808080',
+      closeBtn: '#C0C0C0', closeBtnText: '#000000',
+      iconLabel: '#FFFFFF', iconLabelSel: '#FFFFFF',
+      iconSelBg: '#000080', desktopIconBg: '#0080A0',
+      statusBg: '#C0C0C0', statusText: '#000000',
+    };
+
+    // ===== 桌面图标 =====
+    const desktopIcons = [
+      { x: 2, y: 2,  label: 'My Computer', glyph: 'PC',  action: 'mycomputer' },
+      { x: 2, y: 8,  label: 'Documents',   glyph: 'DOC', action: 'docs' },
+      { x: 2, y: 14, label: 'Recycle Bin', glyph: 'BIN', action: 'recycle' },
+      { x: 2, y: 20, label: 'MS-DOS',      glyph: '>',   action: 'exit' },
+    ];
+
+    // ===== 分组定义 =====
+    const groupDefs = {
+      main: { label: 'Main', items: [
+        { label: 'File Manager',   g: 'FM',  action: 'filemgr' },
+        { label: 'Control Panel',  g: 'CP',  action: 'cpanel' },
+        { label: 'Print Manager',  g: 'PM',  action: 'printmgr' },
+        { label: 'Clipboard',      g: 'CL',  action: 'clipbd' },
+        { label: 'MS-DOS Prompt',  g: '>',   action: 'exit' },
+        { label: 'Windows Setup',  g: 'WS',  action: 'winsetup' },
+        { label: 'Read Me',        g: 'TXT', action: 'readme' },
+        { label: 'PIF Editor',     g: 'PIF', action: 'pif' },
+      ]},
+      acc: { label: 'Accessories', items: [
+        { label: 'Calculator',   g: 'CAL', action: 'calc' },
+        { label: 'Calendar',     g: 'CAL', action: 'cal' },
+        { label: 'Cardfile',     g: 'CRD', action: 'card' },
+        { label: 'Clock',        g: 'CLK', action: 'clock' },
+        { label: 'Notepad',      g: 'NPD', action: 'notepad' },
+        { label: 'Paintbrush',   g: 'PNT', action: 'paint' },
+        { label: 'Write',        g: 'WRT', action: 'write' },
+        { label: 'Terminal',     g: 'TRM', action: 'term' },
+      ]},
+      games: { label: 'Games', items: [
+        { label: 'Solitaire',     g: 'SOL', action: 'solitaire' },
+        { label: 'Minesweeper',   g: 'MIN', action: 'mines' },
+        { label: 'FreeCell',      g: 'FRE', action: 'freecell' },
+      ]},
+      startup: { label: 'Startup', items: [] },
+    };
+
+    // ===== 窗口管理 =====
+    let windows = [];
+    let zStack = [];  // 窗口 id 栈，末尾为最顶层
+    let winIdCounter = 0;
+
+    function makeWin(x, y, w, h, title, opts) {
+      opts = opts || {};
+      const id = ++winIdCounter;
+      return {
+        id, x, y, w, h, title,
+        menus: opts.menus || [
+          { name: 'File',  items: ['Open', 'Exit'] },
+          { name: 'Help',  items: ['About'] },
+        ],
+        icons: opts.icons || null,
+        text: opts.text || null,
+        about: opts.about || null,
+      };
+    }
+    function addWin(w) {
+      windows.push(w);
+      zStack.push(w.id);
+      return w;
+    }
+    function topWin() { return zStack.length ? windows.find(w => w.id === zStack[zStack.length - 1]) : null; }
+    function bringFront(id) {
+      const i = zStack.indexOf(id);
+      if (i >= 0) { zStack.splice(i, 1); zStack.push(id); }
+    }
+    function closeWin(id) {
+      const i = windows.findIndex(w => w.id === id);
+      if (i >= 0) {
+        windows.splice(i, 1);
+        const zi = zStack.indexOf(id);
+        if (zi >= 0) zStack.splice(zi, 1);
+      }
+    }
+
+    // 初始：Program Manager
+    function openProgman() {
+      const gis = [];
+      let gx = 3, gy = 2;
+      ['main', 'acc', 'games', 'startup'].forEach((k, idx) => {
+        gis.push({ x: gx, y: gy, label: groupDefs[k].label, g: 'GRP', group: k });
+        gx += 9;
+        if ((idx + 1) % 4 === 0) { gx = 3; gy += 6; }
+      });
+      addWin(makeWin(10, 2, 56, 22, 'Program Manager', {
+        menus: [
+          { name: 'File',    items: ['New...', 'Open', 'Run...', 'Exit Windows'] },
+          { name: 'Options', items: ['Auto Arrange', 'Minimize on Use', 'Save Settings'] },
+          { name: 'Window',  items: ['Cascade', 'Tile', 'Arrange Icons'] },
+          { name: 'Help',    items: ['Contents', 'About'] },
+        ],
+        icons: gis,
+      }));
+    }
+    openProgman();
+
+    // ===== 动作 =====
+    function doAction(action) {
+      if (action === 'exit') { exitWin = true; closeWin3(); return; }
+      if (action === 'readme' || action === 'docs') {
+        addWin(makeWin(22, 6, 46, 14, 'README.TXT - Notepad', {
+          menus: [
+            { name: 'File', items: ['New', 'Open', 'Save', 'Exit'] },
+            { name: 'Edit', items: ['Undo', 'Cut', 'Copy', 'Paste'] },
+            { name: 'Help', items: ['About'] },
+          ],
+          text: [
+            'katoDoS v1.0  --  Windows 3.x',
+            '================================',
+            '',
+            '  Welcome to katoDoS character',
+            '  desktop environment!',
+            '',
+            '  This GUI is built entirely',
+            '  from block characters drawn',
+            '  on a canvas. No real widgets.',
+            '',
+            '  Double-click desktop icons',
+            '  to open windows.',
+            '',
+            '  Press Esc or Q to exit.',
+          ],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'mycomputer') {
+        addWin(makeWin(16, 4, 52, 16, 'My Computer', {
+          menus: [
+            { name: 'File', items: ['Open', 'Format', 'Exit'] },
+            { name: 'Help', items: ['About'] },
+          ],
+          icons: [
+            { x: 3, y: 2, label: 'C:', g: 'DSK', drive: 'C' },
+            { x: 12, y: 2, label: 'A:', g: 'DSK', drive: 'A' },
+            { x: 21, y: 2, label: 'D:', g: 'CDR', drive: 'D' },
+            { x: 30, y: 2, label: 'Control', g: 'CP', action: 'cpanel' },
+            { x: 39, y: 2, label: 'Printers', g: 'PM', action: 'printmgr' },
+          ],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'recycle') {
+        addWin(makeWin(28, 8, 40, 10, 'Recycle Bin', {
+          menus: [{ name: 'File', items: ['Empty', 'Exit'] }, { name: 'Help', items: ['About'] }],
+          text: ['  (Recycle Bin is empty)  ', '', '  No items to display.'],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'calc') {
+        addWin(makeWin(30, 6, 30, 16, 'Calculator', {
+          menus: [{ name: 'Edit', items: ['Copy', 'Paste'] }, { name: 'Help', items: ['About'] }],
+          text: [
+            '  +----------------+',
+            '  |     0.000      |',
+            '  +----------------+',
+            '  ',
+            '   7  8  9   /   C',
+            '   4  5  6   *   CE',
+            '   1  2  3   -   <-',
+            '   0  .  =   +   +/-',
+          ],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'clock') {
+        const now = new Date();
+        const t = now.toLocaleTimeString();
+        addWin(makeWin(34, 8, 28, 10, 'Clock', {
+          menus: [{ name: 'Settings', items: ['Analog', 'Digital'] }, { name: 'Help', items: ['About'] }],
+          text: ['', '  +----------------+', '  |   ' + t + '   |', '  +----------------+', '', '  ' + now.toDateString()],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'notepad') {
+        addWin(makeWin(22, 6, 46, 14, 'Untitled - Notepad', {
+          menus: [
+            { name: 'File', items: ['New', 'Open', 'Save', 'Exit'] },
+            { name: 'Edit', items: ['Undo', 'Cut', 'Copy', 'Paste'] },
+            { name: 'Help', items: ['About'] },
+          ],
+          text: ['', '  (empty document)', '', '  Type your text here...'],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (action === 'mines') {
+        statusMsg = '启动 Minesweeper...';
+        closeWin3();
+        setTimeout(() => openGame('MINES'), 80);
+        return;
+      }
+      if (action === 'solitaire') {
+        statusMsg = 'Solitaire 需要真正的图形支持';
+        return;
+      }
+      // 其他动作：显示 About 对话框
+      const labels = {
+        filemgr: 'File Manager', cpanel: 'Control Panel', printmgr: 'Print Manager',
+        clipbd: 'Clipboard Viewer', winsetup: 'Windows Setup', pif: 'PIF Editor',
+        cal: 'Calendar', card: 'Cardfile', paint: 'Paintbrush',
+        write: 'Write', term: 'Terminal', freecell: 'FreeCell',
+      };
+      const name = labels[action] || action;
+      addWin(makeWin(28, 8, 40, 12, name, {
+        menus: [{ name: 'File', items: ['Exit'] }, { name: 'Help', items: ['About'] }],
+        text: [
+          '',
+          '  ' + name,
+          '  ----------------',
+          '',
+          '  This is a stub application.',
+          '  Full functionality requires',
+          '  a real Windows 3.x system.',
+          '',
+          '  Click [X] or File > Exit to close.',
+        ],
+      }));
+      bringFront(topWin().id);
+    }
+
+    // ===== 绘制 =====
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      const r = cv.getBoundingClientRect();
+      cv.width = r.width * dpr;
+      cv.height = r.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      cols = Math.floor(r.width / W);
+      rows = Math.floor(r.height / H);
+    }
+
+    function cell(c, r, ch, fg, bg) {
+      if (c < 0 || c >= cols || r < 0 || r >= rows) return;
+      const x = c * W, y = r * H;
+      if (bg) { ctx.fillStyle = bg; ctx.fillRect(x, y, W, H); }
+      if (ch) {
+        ctx.fillStyle = fg || '#FFFFFF';
+        ctx.font = 'bold 13px "Courier New",monospace';
+        ctx.textBaseline = 'top';
+        ctx.fillText(ch, x + 1, y + 2);
+      }
+    }
+    function text(c, r, str, fg, bg) {
+      for (let i = 0; i < str.length; i++) cell(c + i, r, str[i], fg, bg);
+    }
+    function fillRect(c0, r0, cw, rh, bg) {
+      for (let r = r0; r < r0 + rh; r++)
+        for (let c = c0; c < c0 + cw; c++) cell(c, r, ' ', null, bg);
+    }
+
+    // 画小图标（3x3 字符）
+    function drawGlyph(cx, ry, glyph, fg, bg) {
+      const A = {  // 3行x3列 字符画
+        'PC':  ['┌─┐','│▪_│'.slice(0,3),'└─┘'],
+        'DOC': ['┌─┐','│≡│','└─┘'],
+        'BIN': ['┌─┐','│X│','└─┘'],
+        '>':   [' ▶ ',' ▶ ',' ▶ '],
+        'GRP': ['╔═╗','║█║','╚═╝'],
+        'DSK': ['┌─┐','│D│','└─┘'],
+        'CDR': ['┌─┐','│O│','└─┘'],
+        'FM':  ['[_]','│ │','[_]'],
+        'CP':  ['╔═╗','║◇║','╚═╝'],
+        'PM':  ['┌─┐','│P│','└─┘'],
+        'CL':  ['┌─┐','│=│','└─┘'],
+        'WS':  ['┌─┐','│W│','└─┘'],
+        'TXT': ['┌─┐','│T│','└─┘'],
+        'PIF': ['┌─┐','│P│','└─┘'],
+        'CAL': ['┌─┐','│#│','└─┘'],
+        'CRD': ['┌─┐','│C│','└─┘'],
+        'CLK': ('┌─┐│⊙│└─┘'.match(/.../g)),
+        'NPD': ['┌─┐','│N│','└─┘'],
+        'PNT': ['┌─┐','│P│','└─┘'],
+        'WRT': ['┌─┐','│W│','└─┘'],
+        'TRM': ['┌─┐','│>│','└─┘'],
+        'SOL': ['┌─┐','│S│','└─┘'],
+        'MIN': ['┌─┐','│*│','└─┘'],
+        'FRE': ['┌─┐','│F│','└─┘'],
+      };
+      const g = A[glyph] || ['???','???','???'];
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+          cell(cx + j, ry + i, g[i][j] || ' ', fg, bg);
+    }
+
+    function drawIcon(cx, ry, icon, selBg, selFg, normBg, normFg) {
+      const sel = icon._sel;
+      drawGlyph(cx, ry, icon.g, sel ? selFg : normFg, sel ? selBg : normBg);
+      const ly = ry + 3;
+      const label = icon.label;
+      const lx = cx + Math.floor((3 - label.length) / 2);
+      for (let j = 0; j < label.length; j++) {
+        if (lx + j >= 0 && lx + j < cols)
+          cell(lx + j, ly, label[j], sel ? selFg : normFg, sel ? selBg : normBg);
+      }
+    }
+
+    function drawWindow(w) {
+      const active = (w.id === zStack[zStack.length - 1]);
+      const tBg = active ? C.titleBar : C.titleInactive;
+      const x = w.x, y = w.y, ww = w.w, hh = w.h;
+
+      // 外框 3D
+      // 上、左 亮
+      fillRect(x, y, ww, 1, C.frameLight);
+      fillRect(x, y, 1, hh, C.frameLight);
+      // 下、右 暗
+      fillRect(x, y + hh - 1, ww, 1, C.frameDark);
+      fillRect(x + ww - 1, y, 1, hh, C.frameDark);
+
+      // 标题栏（第1行内部，但这里用第0行就是标题）
+      // 布局：[标题文本......][空格][□][X]
+      // 标题栏占 y 行
+      fillRect(x + 1, y, ww - 2, 1, tBg);
+      const titleStr = ' ' + w.title + ' ';
+      text(x + 1, y, titleStr.slice(0, ww - 5), C.titleText, tBg);
+      // 右侧关闭按钮 [X]
+      const bx = x + ww - 4;
+      cell(bx,     y, '[', C.closeBtnText, C.winBg);
+      cell(bx + 1, y, 'X', '#FFFFFF', '#800000');
+      cell(bx + 2, y, ']', C.closeBtnText, C.winBg);
+
+      // 菜单栏
+      const my = y + 1;
+      fillRect(x + 1, my, ww - 2, 1, C.menuBar);
+      let mx = x + 2;
+      w.menus.forEach((m, mi) => {
+        const msel = openMenu && openMenu.winId === w.id && openMenu.mi === mi;
+        const bg = msel ? C.menuSel : C.menuBar;
+        const fg = msel ? C.menuSelText : C.winText;
+        text(mx, my, ' ' + m.name + ' ', fg, bg);
+        m._x = mx; m._w = m.name.length + 2;
+        mx += m.name.length + 3;
+      });
+
+      // 客户区背景
+      const cy0 = y + 2;
+      const ch = hh - 3;
+      fillRect(x + 1, cy0, ww - 2, ch, C.winBg);
+
+      // 客户区内边框（凹下）
+      for (let c = x + 1; c < x + ww - 1; c++) {
+        cell(c, cy0, ' ', C.winText, C.winBg);
+        cell(c, cy0, '─', C.frameDark, C.winBg);
+      }
+
+      // 客户区内容
+      if (w.icons) {
+        for (let i = 0; i < w.icons.length; i++) {
+          const ic = w.icons[i];
+          ic._sel = (selectedInWin && selectedInWin.winId === w.id && selectedInWin.idx === i);
+          drawIcon(x + 2 + ic.x, cy0 + 1 + ic.y, ic,
+            C.iconSelBg, C.iconLabelSel, C.winBg, C.winText);
+        }
+      }
+      if (w.text) {
+        for (let i = 0; i < w.text.length && i < ch - 1; i++) {
+          text(x + 2, cy0 + 1 + i, w.text[i].slice(0, ww - 4), C.winText, C.winBg);
+        }
+      }
+
+      // 下拉菜单
+      if (openMenu && openMenu.winId === w.id) {
+        const m = w.menus[openMenu.mi];
+        const mw = Math.max(...m.items.map(s => s.length)) + 4;
+        const mh = m.items.length + 2;
+        const mx0 = m._x;
+        const my0 = my + 1;
+        fillRect(mx0, my0, mw, mh, C.winBg);
+        // 边框
+        for (let c = mx0; c < mx0 + mw; c++) cell(c, my0, '─', C.frameDark, C.winBg);
+        for (let c = mx0; c < mx0 + mw; c++) cell(c, my0 + mh - 1, '─', C.frameDark, C.winBg);
+        for (let r = my0; r < my0 + mh; r++) {
+          cell(mx0, r, '│', C.frameDark, C.winBg);
+          cell(mx0 + mw - 1, r, '│', C.frameDark, C.winBg);
+        }
+        // 菜单项
+        for (let i = 0; i < m.items.length; i++) {
+          const sel = (openMenu.hover === i);
+          const bg = sel ? C.menuSel : C.winBg;
+          const fg = sel ? C.menuSelText : C.winText;
+          text(mx0 + 2, my0 + 1 + i, ' ' + m.items[i], fg, bg);
+        }
+      }
+    }
+
+    function render() {
+      resize();
+      // 桌面
+      for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+          cell(c, r, '░', C.desktopPat, C.desktop);
+
+      // 桌面图标
+      for (let i = 0; i < desktopIcons.length; i++) {
+        const ic = desktopIcons[i];
+        const sel = (selectedDesktop === i);
+        drawIcon(ic.x, ic.y, { g: ic.glyph, label: ic.label, _sel: sel },
+          C.iconSelBg, C.iconLabelSel, C.desktopIconBg, C.iconLabel);
+      }
+
+      // 窗口按 z 序绘制
+      for (const id of zStack) {
+        const w = windows.find(x => x.id === id);
+        if (w) drawWindow(w);
+      }
+
+      // 状态栏（最底1行）
+      fillRect(0, rows - 1, cols, 1, C.statusBg);
+      text(1, rows - 1, ' ' + statusMsg.slice(0, cols - 2) + ' ', C.statusText, C.statusBg);
+
+      // 鼠标指针 ◈
+      const mc = mouse.cx, mr = mouse.cy;
+      if (mc >= 0 && mc < cols && mr >= 0 && mr < rows) {
+        cell(mc, mr, '◈', '#FFFF00', null);
+      }
+    }
+
+    // ===== 命中检测 =====
+    function hitTest(cx, cy) {
+      // 从顶层往下测
+      for (let i = zStack.length - 1; i >= 0; i--) {
+        const w = windows.find(x => x.id === zStack[i]);
+        if (!w) continue;
+        const x = w.x, y = w.y, ww = w.w, hh = w.h;
+        if (cx < x || cx >= x + ww || cy < y || cy >= y + hh) continue;
+        // 标题栏
+        if (cy === y) {
+          const bx = x + ww - 4;
+          if (cx >= bx && cx <= bx + 2) return { type: 'close', winId: w.id };
+          return { type: 'title', winId: w.id };
+        }
+        // 菜单栏
+        if (cy === y + 1) {
+          for (let mi = 0; mi < w.menus.length; mi++) {
+            const m = w.menus[mi];
+            if (cx >= m._x && cx < m._x + m._w) return { type: 'menu', winId: w.id, mi };
+          }
+        }
+        // 客户区图标
+        if (w.icons) {
+          const cy0 = y + 2;
+          for (let j = 0; j < w.icons.length; j++) {
+            const ic = w.icons[j];
+            const ix = x + 2 + ic.x, iy = cy0 + 1 + ic.y;
+            if (cx >= ix && cx < ix + 3 && cy >= iy && cy < iy + 4)
+              return { type: 'winicon', winId: w.id, idx: j };
+          }
+        }
+        return { type: 'client', winId: w.id };
+      }
+      // 桌面图标
+      for (let i = 0; i < desktopIcons.length; i++) {
+        const ic = desktopIcons[i];
+        if (cx >= ic.x && cx < ic.x + 3 && cy >= ic.y && cy < ic.y + 4)
+          return { type: 'desktopicon', idx: i };
+      }
+      return { type: 'desktop' };
+    }
+
+    // ===== 事件 =====
+    function onMouseMove(e) {
+      const r = cv.getBoundingClientRect();
+      mouse.cx = Math.floor((e.clientX - r.left) / W);
+      mouse.cy = Math.floor((e.clientY - r.top) / H);
+      if (dragWin) {
+        dragWin.x = mouse.cx - dragOff.x;
+        dragWin.y = mouse.cy - dragOff.y;
+        if (dragWin.x < 0) dragWin.x = 0;
+        if (dragWin.y < 0) dragWin.y = 0;
+        if (dragWin.x + dragWin.w >= cols) dragWin.x = cols - dragWin.w;
+        if (dragWin.y + dragWin.h >= rows - 1) dragWin.y = rows - 1 - dragWin.h;
+      }
+    }
+    function onMouseDown(e) {
+      mouse.down = true;
+      const hit = hitTest(mouse.cx, mouse.cy);
+      // 优先处理已打开的下拉菜单项点击
+      if (openMenu) {
+        const w = windows.find(x => x.id === openMenu.winId);
+        if (w) {
+          const m = w.menus[openMenu.mi];
+          const mw = Math.max(...m.items.map(s => s.length)) + 4;
+          const mh = m.items.length + 2;
+          const mx0 = m._x;
+          const my0 = w.y + 2;
+          if (mouse.cx >= mx0 && mouse.cx < mx0 + mw && mouse.cy >= my0 && mouse.cy < my0 + mh) {
+            const itemIdx = mouse.cy - my0 - 1;
+            if (itemIdx >= 0 && itemIdx < m.items.length) {
+              handleMenu(w, openMenu.mi, m.items[itemIdx]);
+              openMenu = null;
+              return;
+            }
+          }
+        }
+      }
+      // 关菜单
+      if (openMenu && hit.type !== 'menu') {
+        openMenu = null;
+      }
+      if (hit.type === 'close') {
+        closeWin(hit.winId);
+        statusMsg = '窗口已关闭';
+        return;
+      }
+      if (hit.type === 'min') {
+        // 最小化：关闭（简化）
+        closeWin(hit.winId);
+        return;
+      }
+      if (hit.type === 'title') {
+        bringFront(hit.winId);
+        dragWin = windows.find(w => w.id === hit.winId);
+        dragOff.x = mouse.cx - dragWin.x;
+        dragOff.y = mouse.cy - dragWin.y;
+        selectedInWin = null;
+        return;
+      }
+      if (hit.type === 'menu') {
+        const w = windows.find(x => x.id === hit.winId);
+        if (openMenu && openMenu.winId === hit.winId && openMenu.mi === hit.mi) {
+          openMenu = null;
+        } else {
+          openMenu = { winId: hit.winId, mi: hit.mi, items: w.menus[hit.mi].items, hover: -1 };
+        }
+        bringFront(hit.winId);
+        return;
+      }
+      if (hit.type === 'winicon') {
+        bringFront(hit.winId);
+        selectedInWin = { winId: hit.winId, idx: hit.idx };
+        const w = windows.find(x => x.id === hit.winId);
+        const ic = w.icons[hit.idx];
+        // 双击检测
+        const now = Date.now();
+        const key = 'wi:' + hit.winId + ':' + hit.idx;
+        if (now - lastClickTime < 400 && lastClickTarget === key) {
+          // 双击
+          if (ic.group) {
+            // 打开分组窗口
+            const gd = groupDefs[ic.group];
+            const gis = gd.items.map((it, idx) => ({
+              x: 3 + (idx % 4) * 8, y: 2 + Math.floor(idx / 4) * 5,
+              label: it.label, g: it.g, action: it.action,
+            }));
+            addWin(makeWin(18 + Math.random() * 10, 4 + Math.random() * 4, 48, 14, gd.label, {
+              menus: [
+                { name: 'File', items: ['New', 'Open', 'Exit'] },
+                { name: 'Window', items: ['Cascade', 'Tile'] },
+                { name: 'Help', items: ['About'] },
+              ],
+              icons: gis,
+            }));
+            bringFront(topWin().id);
+            statusMsg = gd.label + ' - 双击程序图标启动';
+          } else if (ic.action) {
+            doAction(ic.action);
+          } else if (ic.drive) {
+            statusMsg = '驱动器 ' + ic.drive + ': 已打开';
+            addWin(makeWin(24, 6, 42, 12, ic.drive + ':\\ - File Manager', {
+              menus: [{ name: 'File', items: ['Open', 'Exit'] }, { name: 'Help', items: ['About'] }],
+              text: [
+                '  ' + ic.drive + ':\\',
+                '  +-- DOS',
+                '  +-- WINDOWS',
+                '  +-- DRIVERS',
+                '  +-- GAMES',
+                '  +-- NET',
+                '',
+                '  双击目录进入（演示）',
+              ],
+            }));
+            bringFront(topWin().id);
+          }
+          lastClickTime = 0;
+        } else {
+          lastClickTime = now;
+          lastClickTarget = key;
+          statusMsg = '已选中: ' + ic.label + ' (双击打开)';
+        }
+        return;
+      }
+      if (hit.type === 'desktopicon') {
+        selectedDesktop = hit.idx;
+        selectedInWin = null;
+        const ic = desktopIcons[hit.idx];
+        const now = Date.now();
+        const key = 'dc:' + hit.idx;
+        if (now - lastClickTime < 400 && lastClickTarget === key) {
+          // 双击
+          selectedDesktop = -1;
+          doAction(ic.action);
+          lastClickTime = 0;
+        } else {
+          lastClickTime = now;
+          lastClickTarget = key;
+          statusMsg = '已选中: ' + ic.label + ' (双击打开)';
+        }
+        return;
+      }
+      // 点桌面空白
+      if (hit.type === 'desktop') {
+        selectedDesktop = -1;
+        selectedInWin = null;
+        openMenu = null;
+      }
+    }
+    function onMouseUp() { mouse.down = false; dragWin = null; }
+
+    function onKey(e) {
+      const k = e.key;
+      const kl = k.toLowerCase();
+      // 退出
+      if (kl === 'q' || k === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (openMenu) { openMenu = null; return; }
+        exitWin = true;
+        closeWin3();
+        return;
+      }
+      // Alt+F4 关闭当前窗口
+      if (e.altKey && k === 'F4') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const t = topWin();
+        if (t) { closeWin(t.id); statusMsg = '窗口已关闭 (Alt+F4)'; }
+        else { exitWin = true; closeWin3(); }
+        return;
+      }
+      // 菜单导航
+      if (openMenu) {
+        if (k === 'ArrowDown') { e.preventDefault(); openMenu.hover = Math.min(openMenu.hover + 1, openMenu.items.length - 1); return; }
+        if (k === 'ArrowUp')   { e.preventDefault(); openMenu.hover = Math.max(openMenu.hover - 1, 0); return; }
+        if (k === 'Enter') {
+          e.preventDefault();
+          if (openMenu.hover >= 0) {
+            const w = windows.find(x => x.id === openMenu.winId);
+            const item = w.menus[openMenu.mi].items[openMenu.hover];
+            handleMenu(w, openMenu.mi, item);
+            openMenu = null;
+          }
+          return;
+        }
+      }
+      e.stopImmediatePropagation();
+    }
+
+    function handleMenu(w, mi, item) {
+      if (item === 'Exit Windows' || item === 'Exit') {
+        if (w.id === windows[0].id && item === 'Exit Windows') {
+          exitWin = true; closeWin3(); return;
+        }
+        closeWin(w.id);
+        statusMsg = '通过菜单关闭窗口';
+        return;
+      }
+      if (item === 'About') {
+        addWin(makeWin(30, 8, 36, 10, 'About', {
+          menus: [],
+          text: ['', '  katoDoS Windows 3.x', '  Character Desktop v1.0', '', '  (C) 2026 katoDoS Project', '', '  Built with Canvas + block chars'],
+        }));
+        bringFront(topWin().id);
+        return;
+      }
+      if (item === 'Empty') { statusMsg = '回收站已清空'; return; }
+      statusMsg = w.title + ' > ' + w.menus[mi].name + ' > ' + item;
+    }
+
+    cv.addEventListener('mousemove', onMouseMove);
+    cv.addEventListener('mousedown', onMouseDown);
+    cv.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('keydown', onKey, true);  // 捕获阶段，确保先处理
+
+    let raf = requestAnimationFrame(function loop() {
+      if (exitWin) return;
+      render();
+      raf = requestAnimationFrame(loop);
+    });
+
+    win3 = {
+      destroy() {
+        exitWin = true;
+        cancelAnimationFrame(raf);
+        cv.removeEventListener('mousemove', onMouseMove);
+        cv.removeEventListener('mousedown', onMouseDown);
+        cv.removeEventListener('mouseup', onMouseUp);
+        document.removeEventListener('keydown', onKey, true);
+        winOverlay.style.display = 'none';
+      },
+    };
+  }
+
+  function closeWin3() {
+    py('free_game').catch(() => {});
+    if (win3) { win3.destroy(); win3 = null; }
+    inputBuffer = ''; showInput();
+  }
+
+  /* ================= 键盘路由 ================= */
+  document.addEventListener('keydown', e => {
+    if (booting) return;
+    audioInit(); // 首次按键解锁 Web Audio（开机为自动流程，不依赖按键）
+    if (gameOverlay.style.display === 'flex') {
+      if (activeGame) activeGame.onKey(e);
+      e.preventDefault();
+      return;
+    }
+    if (winOverlay.style.display === 'block') return; // Win3 自行处理键盘
+    if (editorOverlay.style.display === 'flex') return;
+    // Ctrl+C: 中断/清行（保持现有行为）
+    if (e.ctrlKey && e.key === 'c' && !e.shiftKey) { inputBuffer = ''; renderLine('dim', '^C'); showInput(); return; }
+    // Ctrl+Shift+C: 复制选中文本或输入缓冲区
+    if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+      e.preventDefault();
+      const txt = window.getSelection().toString() || inputBuffer;
+      if (txt) {
+        navigator.clipboard.writeText(txt).catch(() => {});
+        renderLine('dim', '已复制: ' + txt.slice(0, 40) + (txt.length > 40 ? '...' : ''));
+      }
+      return;
+    }
+    // Ctrl+V 或 Ctrl+Shift+V: 粘贴
+    if ((e.ctrlKey && e.key === 'v') || (e.ctrlKey && e.shiftKey && (e.key === 'v' || e.key === 'V'))) {
+      e.preventDefault();
+      navigator.clipboard.readText().then(txt => {
+        if (txt) {
+          // 去除换行符，追加到输入缓冲区
+          const clean = txt.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+          inputBuffer += clean;
+          showInput();
+        }
+      }).catch(() => {});
+      return;
+    }
+    if (e.ctrlKey && e.key === 'l') { e.preventDefault(); outputEl.innerHTML = ''; showInput(); return; }
+    if (e.key === 'Enter') {
+      const line = inputBuffer.trim();
+      if (line) { history.push(line); histIndex = history.length; }
+      sfxEnter();
+      submit(line);
+      return;
+    }
+    if (e.key === 'Backspace') { inputBuffer = inputBuffer.slice(0, -1); sfxKey(); }
+    else if (e.key === 'ArrowUp') {
+      if (histIndex > 0) { histIndex--; inputBuffer = history[histIndex]; }
+      e.preventDefault();
+    } else if (e.key === 'ArrowDown') {
+      if (histIndex < history.length - 1) { histIndex++; inputBuffer = history[histIndex]; }
+      else { histIndex = history.length; inputBuffer = ''; }
+      e.preventDefault();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      renderLine('dim', '命令: dir cd md rd copy del type echo set help ver cls mem vol systeminfo asm c');
+      renderLine('dim', '游戏: snake tetris mines guess matrix   (SAVE/LOAD 存读档)');
+      showInput();
+    }     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (keyboardBroken) {
+        // 键盘驱动缺失：按键映射错乱，某些键无响应、某些键输出异常字符
+        const garbled = '░▒▓█▄▀■▌▐╳╲╱◥◤◢◣☰☱☲☳';  // 乱码字形池
+        const rand = Math.random();
+        if (rand < 0.25) {
+          // 25% 概率按键无响应
+          e.preventDefault();
+          return;
+        } else if (rand < 0.50) {
+          // 25% 概率输出乱码字形
+          inputBuffer += garbled[Math.floor(Math.random() * garbled.length)];
+        } else {
+          // 50% 概率输出错误字符 (键盘偏移)
+          const offset = Math.floor(Math.random() * 6) - 3;
+          const cc = e.key.charCodeAt(0);
+          inputBuffer += String.fromCharCode(cc + offset);
+        }
+      } else {
+        inputBuffer += e.key;
+      }
+      sfxKey();
+    }
+    showInput();
+  });
+
+  window.addEventListener('pywebviewready', doBoot);
+</script>
+</body>
+</html>
